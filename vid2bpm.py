@@ -6,6 +6,7 @@ import argparse
 import re
 import matplotlib.pyplot as plt
 
+
 def extract_frame_features(video_path, resize_dim=(64, 64), start_time=None, end_time=None):
     """
     Reads video frames from a specified timestamp range, converts to grayscale,
@@ -100,7 +101,6 @@ def sliding_window_bpm(features, fps, window_sec, hop_sec, tolerance=2.0, smooth
         else:
             ps, pe, pb = merged[-1]
             if abs(bpm - pb) <= tolerance:
-                # weighted average BPM
                 w1 = pe - ps
                 w2 = e - s
                 merged[-1][2] = (pb * w1 + bpm * w2) / (w1 + w2)
@@ -129,8 +129,8 @@ def parse_timestamp(timestamp: str) -> float:
             raise ValueError("Bad timestamp format.")
         return h*3600 + m*60 + s
     pattern = (
-        r'(?:(?P<h>\d+)h)?'  
-        r'(?:(?P<m>\d+)m)?'  
+        r'(?:(?P<h>\d+)h)?'
+        r'(?:(?P<m>\d+)m)?'
         r'(?:(?P<s>\d+(?:\.\d+)?)s)?'
     )
     m = re.fullmatch(pattern, ts)
@@ -144,23 +144,32 @@ def parse_timestamp(timestamp: str) -> float:
     return float(ts)
 
 
+def format_timestamp(seconds: float) -> str:
+    """
+    Formats a float number of seconds into HH:MM:SS string.
+    """
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Detect variable BPM sections in a video.")
     parser.add_argument("video_path", help="Input video file path")
     parser.add_argument("--resize", nargs=2, type=int, default=[64,64],
                         help="Resize dimensions (width height)")
-    parser.add_argument("--start", type=str, default=None, help="Start time")
-    parser.add_argument("--end",   type=str, default=None, help="End time")
-    parser.add_argument("--window", type=str, default=None,
-                        help="Window length (e.g. '5s' or '00:05')")
-    parser.add_argument("--hop",    type=str, default=None,
-                        help="Hop length (e.g. '1s' or '00:01')")
+    parser.add_argument("--start", type=str, default=None, help="Start time (e.g. '00:10')")
+    parser.add_argument("--end",   type=str, default=None, help="End time (e.g. '01:00')")
+    parser.add_argument("--window", type=str, default="5s",
+                        help="Window length for BPM estimation (default: 5s)")
+    parser.add_argument("--hop",    type=str, default="1s",
+                        help="Hop length between windows (default: 1s)")
     parser.add_argument("--tol",    type=float, default=2.0,
-                        help="Merge tolerance in BPM")
+                        help="Merge tolerance in BPM (default: 2.0)")
     parser.add_argument("--plot", action="store_true", help="Show intermediate plots")
     args = parser.parse_args()
 
-    # Parse optional times
     start = parse_timestamp(args.start) if args.start else None
     end   = parse_timestamp(args.end)   if args.end   else None
 
@@ -172,21 +181,15 @@ def main():
         return
     print(f"Got {n_frames} frames @ {fps:.2f} FPS")
 
-    if args.window and args.hop:
-        w_sec = parse_timestamp(args.window)
-        h_sec = parse_timestamp(args.hop)
-        print(f"Sliding-window: {w_sec}s window, {h_sec}s hop, tol={args.tol} BPM")
-        segments = sliding_window_bpm(features, fps, w_sec, h_sec, tolerance=args.tol)
-        print("Detected segments:")
-        for s, e, bpm in segments:
-            print(f"{s/fps:.2f}s - {e/fps:.2f}s: {bpm:.1f} BPM")
-    else:
-        # Full-video analysis as fallback
-        T = np.linalg.norm(features[1:] - features[:-1], axis=1)
-        period_f, _ = estimate_period(T, plot=args.plot, min_lag=5)
-        secs = period_f / fps
-        bpm = (fps / period_f) * 60.0
-        print(f"Period: {period_f} frames ({secs:.2f}s) => {bpm:.2f} BPM")
+    w_sec = parse_timestamp(args.window)
+    h_sec = parse_timestamp(args.hop)
+    print(f"Sliding-window: {w_sec}s window, {h_sec}s hop, tol={args.tol} BPM")
+    segments = sliding_window_bpm(features, fps, w_sec, h_sec, tolerance=args.tol)
+    print("Detected segments:")
+    for s, e, bpm in segments:
+        start_str = format_timestamp(s / fps)
+        end_str = format_timestamp(e / fps)
+        print(f"{start_str} - {end_str}: {bpm:.1f} BPM")
 
 if __name__ == "__main__":
     main()
