@@ -5,7 +5,6 @@ from scipy.ndimage import gaussian_filter1d
 import argparse
 import re
 import os
-import subprocess
 import matplotlib.pyplot as plt
 
 
@@ -129,18 +128,27 @@ def format_timestamp_srt(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def slice_video(video_path, segments, output_dir):
+def slice_video_opencv(video_path, segments, output_dir):
     os.makedirs(output_dir, exist_ok=True)
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
     for idx, (s, e, bpm) in enumerate(segments, 1):
-        start_s = s / fps_global
-        end_s = e / fps_global
+        start_frame = s
+        end_frame = e
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         out_path = os.path.join(output_dir, f"segment_{idx:02d}_{int(bpm)}bpm.mp4")
-        cmd = [
-            'ffmpeg', '-y', '-i', video_path,
-            '-ss', str(start_s), '-to', str(end_s),
-            '-c', 'copy', out_path
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+        for f in range(start_frame, end_frame):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            writer.write(frame)
+        writer.release()
+    cap.release()
     print(f"Slices written to {output_dir}")
 
 
@@ -156,16 +164,14 @@ def main():
     parser.add_argument("--min-bpm", type=float, default=None)
     parser.add_argument("--max-bpm", type=float, default=None)
     parser.add_argument("--subtitles", type=str, help="Output SRT path")
-    parser.add_argument("--slice-dir", type=str, help="Directory to output sliced videos")
+    parser.add_argument("--slice-dir", type=str, help="Directory to output sliced videos with OpenCV")
     parser.add_argument("--plot", action="store_true")
     args = parser.parse_args()
 
-    global fps_global
     start = parse_timestamp(args.start) if args.start else None
     end   = parse_timestamp(args.end)   if args.end   else None
 
     features, fps = extract_frame_features(args.video_path, tuple(args.resize), start, end)
-    fps_global = fps
     if features.shape[0] < 2:
         print("Not enough frames.")
         return
@@ -194,7 +200,7 @@ def main():
         print(f"Subtitles written to {args.subtitles}")
 
     if args.slice_dir:
-        slice_video(args.video_path, segments, args.slice_dir)
+        slice_video_opencv(args.video_path, segments, args.slice_dir)
 
 if __name__ == "__main__":
     main()
