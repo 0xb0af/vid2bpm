@@ -167,6 +167,10 @@ def main():
                         help="Hop length between windows (default: 1s)")
     parser.add_argument("--tol",    type=float, default=2.0,
                         help="Merge tolerance in BPM (default: 2.0)")
+    parser.add_argument("--min-bpm", type=float, default=None,
+                        help="Minimum BPM to include in output")
+    parser.add_argument("--max-bpm", type=float, default=None,
+                        help="Maximum BPM to include in output")
     parser.add_argument("--plot", action="store_true", help="Show intermediate plots")
     args = parser.parse_args()
 
@@ -185,11 +189,27 @@ def main():
     h_sec = parse_timestamp(args.hop)
     print(f"Sliding-window: {w_sec}s window, {h_sec}s hop, tol={args.tol} BPM")
     segments = sliding_window_bpm(features, fps, w_sec, h_sec, tolerance=args.tol)
+
+    # Filter by BPM range if specified
+    if args.min_bpm is not None or args.max_bpm is not None:
+        filtered = []
+        for s, e, bpm in segments:
+            if args.min_bpm is not None and bpm < args.min_bpm:
+                continue
+            if args.max_bpm is not None and bpm > args.max_bpm:
+                continue
+            filtered.append((s, e, bpm))
+        segments = filtered
+
+    # Sort by segment duration descending
+    segments.sort(key=lambda x: (x[1] - x[0]), reverse=True)
+
     print("Detected segments:")
     for s, e, bpm in segments:
         start_str = format_timestamp(s / fps)
         end_str = format_timestamp(e / fps)
-        print(f"{start_str} - {end_str}: {bpm:.1f} BPM")
+        duration = e - s
+        print(f"{start_str} - {end_str} ({duration/fps:.2f}s): {bpm:.1f} BPM")
 
 if __name__ == "__main__":
     main()
