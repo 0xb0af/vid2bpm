@@ -1,4 +1,4 @@
-# BPM Slicer
+# vid2bpm
 
 A command-line tool written in python to read a local video file and analyze per-frame differences to estimate local periodic motion using autocorrelation. The app detects constant-bpm (beats per minute) sections in a video and can optionally slice and time-scale them too. 
 
@@ -28,7 +28,7 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-./bpm_slicer.py <video_path> [OPTIONS]
+./vid2bpm.py <video_path> [OPTIONS]
 ```
 
 ### Options
@@ -51,41 +51,41 @@ pip install -r requirements.txt
 1. **Basic BPM Detection**
 
    ```bash
-   ./bpm_slicer.py myvideo.mp4
+   ./vid2bpm.py myvideo.mp4
    ```
 
 2. **Restrict to a Specific Time Range**
 
    ```bash
-   ./bpm_slicer.py myvideo.mp4 --start 30s --end 2m
+   ./vid2bpm.py myvideo.mp4 --start 30s --end 2m
    ```
    
 3. **Extract and Slice Segments**
    **What happens:** Detects constant-BPM sections and writes each one as a separate MP4 file in `segments/`.
 
    ```bash
-   ./bpm_slicer.py myvideo.mp4 --slice-dir segments
+   ./vid2bpm.py myvideo.mp4 --slice-dir segments
    ```
    
 4. **Smooth and Fine-Tune Analysis**
    **What happens:** Uses a 10‑second sliding window that hops every 2 seconds. This trades off time resolution versus BPM stability: longer windows give a more reliable BPM estimate, shorter hops catch tempo changes more precisely.
 
    ```bash
-   ./bpm_slicer.py myvideo.mp4 --slice-dir segments --start 30s --end 2m --window 10s --hop 2s
+   ./vid2bpm.py myvideo.mp4 --slice-dir segments --start 30s --end 2m --window 10s --hop 2s
    ```
 
 5. **Rescale Slices to 90 BPM**
    **What happens:** After slicing, each segment at its detected BPM is time-scaled faster or slower so its playback matches exactly 90 BPM. Video framerate remains constant. Optical-flow interpolation preserves smooth motion when speeding up or slowing down.
 
    ```bash
-   ./bpm_slicer.py myvideo.mp4 --slice-dir segments --start 30s --end 2m --window 10s --hop 2s --target-bpm 90
+   ./vid2bpm.py myvideo.mp4 --slice-dir segments --start 30s --end 2m --window 10s --hop 2s --target-bpm 90
    ```
 
 6. **Adjust Output Frame Rate**
    **What happens:** Same as above, but forces the output slices to a different FPS.
 
    ```bash
-   ./bpm_slicer.py myvideo.mp4 --slice-dir segments --start 30s --end 2m --window 10s --hop 2s --target-bpm 90 --target-fps 30
+   ./vid2bpm.py myvideo.mp4 --slice-dir segments --start 30s --end 2m --window 10s --hop 2s --target-bpm 90 --target-fps 30
    ```
 
 ## How the algorithm works
@@ -94,6 +94,4 @@ pip install -r requirements.txt
 2. **Windowed BPM Estimation**: It measures frame‑to‑frame difference magnitude within short windows. Autocorrelation of this signal reveals the dominant repetition period (beat).
 3. **Merging Nearby Beats**: Adjacent windows with very similar BPM (within `--tol`) are merged into longer segments.
 4. **Slice Output**: Each merged segment is extracted from the original video and saved as its own MP4. If `--target-bpm` is specified, those clips are then time-scaled to match the desired tempo.
-
-*BPM Slicer* combines these steps into a single CLI for rapid rhythm-based video editing.
 
