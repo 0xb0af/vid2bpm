@@ -1,7 +1,7 @@
 numpy
 argparse
 #cupy
-#cv2
+opencv-python
 scipy
 scikit-learn
 matplotlib
