@@ -1,91 +1,99 @@
-# vid2bpm
+# BPM Slicer
 
-- slapped-together vibe coding
-- may contain bugs and rough edges
+A command-line tool written in python to read a local video file and analyze per-frame differences to estimate local periodic motion using autocorrelation. The app detects constant-bpm (beats per minute) sections in a video and can optionally slice and time-scale them too. 
 
-## overview
+This program _does not_ read or process audio in any way. The "beat" is determined by looking for repetitive periodic motion in the video.
 
-* analyzes a video file frame by frame (no audio analysis)
-* uses simple autocorrelation on grayscale pixel features to guess the bpm
-* outputs a list of time segments with estimated constant bpm
+This app was written almost entirely using vibe coding with chatGPT, based on this research paper. There will likely be bugs.
 
-## features
+Adhikari, Slesa, "Detecting periodic action patterns in videos" (2020). Theses. 323.
+https://louis.uah.edu/uah-theses/323 
 
-* sliding-window segmentation (`--window`, `--hop`, `--tol`) for varying bpm
-* timestamp parsing in hh\:mm\:ss, mm\:ss, 1h2m3s, or plain seconds
-* filter by min/max bpm (`--min-bpm`, `--max-bpm`)
-* prints segments sorted by longest duration first
-* optional srt subtitle export (`--subtitles`) showing bpm on screen
-* optional video slicing with audio (`--slice-dir`) via moviepy
-* debug plots (`--plot`) of smoothed signal and autocorrelation
+I have no affiliation with the author.
 
+## Features
 
-## usage examples
+* **Slice Segments**: Extract detected BPM-consistent segments into separate video files with `--slice-dir`.
+* **Time-Scaling (Respeed)**: Rescale each slice from its detected BPM to a **target BPM** using optical-flow frame interpolation. Adjust output framerate with `--target-fps`.
+* **Subtitle Export**: Export BPM annotations as an SRT subtitle file with `--subtitles`.
 
-steady music track between 80–120 BPM, full analysis:
+## Installation
 
 ```bash
-./vid2bpm.py path/to/video.mp4
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-(defaults: window=5s, hop=1s, tol=2.0)
-
-custom range and subtitles:
+## Usage
 
 ```bash
-./vid2bpm.py music.mp4 --min-bpm 80 --max-bpm 120 --subtitles bpm.srt
+./bpm_slicer.py <video_path> [OPTIONS]
 ```
 
-slice into segments with audio for a dance clip:
+### Options
 
-```bash
-./vid2bpm.py dance.mp4 \
-  --window 3s --hop 0.5s --tol 4.0 \
-  --slice-dir dance_segments/
-```
+* `--start TIME`        : Begin BPM detection at this timestamp (e.g. `00:01:30`, `90s`, `1m30s`).
+* `--end TIME`          : End BPM detection at this timestamp.
+* `--min-bpm FLOAT`     : Discard any segments slower than this BPM.
+* `--max-bpm FLOAT`     : Discard any segments faster than this BPM.
+* `--slice-dir DIR`     : Directory to write out each detected segment as its own MP4.
+* `--target-bpm FLOAT`  : If set with `--slice-dir`, rescale slices from their detected BPM to this target BPM.
+* `--target-fps FLOAT`  : Frame rate for rescaled slices (default: original video FPS).
+* `--window TIME`       : (Advanced) Length of sliding window for local BPM analysis (default: `5s`).
+* `--hop TIME`          : (Advanced) Step size between windows (default: `1s`).
+* `--plot`              : Show diagnostic plots of the autocorrelation and smoothed signal.
+* `--subtitles FILE`    : Write an SRT subtitle file of BPM labels for each segment.
+* `--resize W H`        : Resize each frame to `W×H` before motion analysis (default: `64 64`). **This affects only analysis**, not output dimensions.
 
-full example combining filters, export, and plotting:
+## Examples
 
-```bash
-./vid2bpm.py highlights.mp4 \
-  --window 8s --hop 2s --tol 5.0 \
-  --min-bpm 60 --max-bpm 200 \
-  --subtitles highlights.srt --slice-dir highlights/ \
-  --plot
-```
+1. **Basic BPM Detection**
 
-## choosing window/hop/tolerance
+   ```bash
+   ./bpm_slicer.py myvideo.mp4
+   ```
 
-acceptable values depend on content and expected tempo:
+2. **Restrict to a Specific Time Range**
 
-* **steady performance (e.g., workout tutorial):**
+   ```bash
+   ./bpm_slicer.py myvideo.mp4 --start 30s --end 2m
+   ```
+   
+3. **Extract and Slice Segments**
+   **What happens:** Detects constant-BPM sections and writes each one as a separate MP4 file in `segments/`.
 
-  * window: 10s, hop: 2s, tol: 3.0 BPM
-  * large window smooths over slight frame noise, small hop keeps updates frequent
+   ```bash
+   ./bpm_slicer.py myvideo.mp4 --slice-dir segments
+   ```
+   
+4. **Smooth and Fine-Tune Analysis**
+   **What happens:** Uses a 10‑second sliding window that hops every 2 seconds. This trades off time resolution versus BPM stability: longer windows give a more reliable BPM estimate, shorter hops catch tempo changes more precisely.
 
-* **music video with occasional breaks:**
+   ```bash
+   ./bpm_slicer.py myvideo.mp4 --slice-dir segments --start 30s --end 2m --window 10s --hop 2s
+   ```
 
-  * window: 5s, hop: 1s, tol: 2.0 BPM
-  * shorter window catches tempo changes at verse/chorus boundaries
+5. **Rescale Slices to 90 BPM**
+   **What happens:** After slicing, each segment at its detected BPM is time-scaled faster or slower so its playback matches exactly 90 BPM. Video framerate remains constant. Optical-flow interpolation preserves smooth motion when speeding up or slowing down.
 
-* **dance performance (variable tempo):**
+   ```bash
+   ./bpm_slicer.py myvideo.mp4 --slice-dir segments --start 30s --end 2m --window 10s --hop 2s --target-bpm 90
+   ```
 
-  * window: 3s, hop: 0.5s, tol: 4.0 BPM
-  * smaller window/hop to track quick shifts, higher tol to merge similar bursts
+6. **Adjust Output Frame Rate**
+   **What happens:** Same as above, but forces the output slices to a different FPS.
 
-* **sports or fast-cut montage:**
+   ```bash
+   ./bpm_slicer.py myvideo.mp4 --slice-dir segments --start 30s --end 2m --window 10s --hop 2s --target-bpm 90 --target-fps 30
+   ```
 
-  * window: 8s, hop: 2s, tol: 5.0 BPM
-  * moderate window handles rapid scene changes; wider tol accounts for jitter
+## How the algorithm works
 
-start with these presets and tweak if output is too noisy (fragmented) or too coarse (misses changes).
+1. **Motion Analysis**: The script converts each frame to grayscale and downsamples it (via `--resize`) to focus on motion, not detail.
+2. **Windowed BPM Estimation**: It measures frame‑to‑frame difference magnitude within short windows. Autocorrelation of this signal reveals the dominant repetition period (beat).
+3. **Merging Nearby Beats**: Adjacent windows with very similar BPM (within `--tol`) are merged into longer segments.
+4. **Slice Output**: Each merged segment is extracted from the original video and saved as its own MP4. If `--target-bpm` is specified, those clips are then time-scaled to match the desired tempo.
 
-## limitations
-
-* bpm detection based solely on video frames; no audio considered
-* may fail on shaky, low-contrast, or variable lighting footage
-* uses naive autocorrelation, not advanced beat-tracking models
-* timestamp parsing and slicing logic can break on edge cases
-* performance will suffer on long or high-resolution videos
-* minimal error handling and user feedback
+*BPM Slicer* combines these steps into a single CLI for rapid rhythm-based video editing.
 
