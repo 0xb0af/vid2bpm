@@ -128,7 +128,59 @@ def format_timestamp_srt(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def slice_video_opencv(video_path, segments, output_dir):
+def convert_video_bpm_fps(input_path: str,
+                          output_path: str,
+                          orig_bpm: float,
+                          target_bpm: float,
+                          target_fps: float):
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise IOError(f"Cannot open video {input_path}")
+    orig_fps = cap.get(cv2.CAP_PROP_FPS)
+    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+    cap.release()
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    writer = cv2.VideoWriter(output_path, fourcc, target_fps, (width, height))
+    speed_factor = orig_bpm / target_bpm
+    gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frames]
+
+    total_out_frames = int(len(frames) * speed_factor * (target_fps / orig_fps))
+    for i in range(total_out_frames):
+        t_out = i / target_fps
+        t_in = t_out / speed_factor
+        idx_f = t_in * orig_fps
+        i0 = int(np.floor(idx_f))
+        i1 = min(i0 + 1, len(frames) - 1)
+        alpha = idx_f - i0
+        if i0 == i1 or alpha == 0:
+            writer.write(frames[i0])
+            continue
+        flow = cv2.calcOpticalFlowFarneback(
+            gray_frames[i0], gray_frames[i1], None, 0.5, 3, 15, 3, 5, 1.2, 0
+        )
+        h, w = gray_frames[i0].shape
+        grid_x, grid_y = np.meshgrid(np.arange(w), np.arange(h))
+        map_x0 = (grid_x + flow[...,0] * alpha).astype(np.float32)
+        map_y0 = (grid_y + flow[...,1] * alpha).astype(np.float32)
+        map_x1 = (grid_x - flow[...,0] * (1-alpha)).astype(np.float32)
+        map_y1 = (grid_y - flow[...,1] * (1-alpha)).astype(np.float32)
+        warp0 = cv2.remap(frames[i0], map_x0, map_y0, interpolation=cv2.INTER_LINEAR)
+        warp1 = cv2.remap(frames[i1], map_x1, map_y1, interpolation=cv2.INTER_LINEAR)
+        out_frame = cv2.addWeighted(warp0, 1-alpha, warp1, alpha, 0)
+        writer.write(out_frame)
+    writer.release()
+    print(f"Written re-sped & resampled video to {output_path}")
+
+
+def slice_video_opencv(video_path, segments, output_dir, target_bpm=None, target_fps=None):
     os.makedirs(output_dir, exist_ok=True)
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -137,19 +189,27 @@ def slice_video_opencv(video_path, segments, output_dir):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 
     for idx, (s, e, bpm) in enumerate(segments, 1):
-        start_frame = s
-        end_frame = e
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        out_path = os.path.join(output_dir, f"segment_{idx:02d}_{int(bpm)}bpm.mp4")
-        writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
-        for f in range(start_frame, end_frame):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, s)
+        slice_path = os.path.join(output_dir, f"segment_{idx:02d}_{int(bpm)}bpm.mp4")
+        writer = cv2.VideoWriter(slice_path, fourcc, fps, (width, height))
+        for f in range(s, e):
             ret, frame = cap.read()
             if not ret:
                 break
             writer.write(frame)
         writer.release()
+        print(f"Written slice: {slice_path}")
+
+        if target_bpm is not None:
+            out_conv = os.path.join(
+                output_dir,
+                f"segment_{idx:02d}_{int(bpm)}bpm_to_{int(target_bpm)}bpm.mp4"
+            )
+            tgt_fps = target_fps or fps
+            convert_video_bpm_fps(slice_path, out_conv, orig_bpm=bpm, target_bpm=target_bpm, target_fps=tgt_fps)
+
     cap.release()
-    print(f"Slices written to {output_dir}")
+    print(f"All slices (and conversions) written to {output_dir}")
 
 
 def main():
@@ -165,42 +225,60 @@ def main():
     parser.add_argument("--max-bpm", type=float, default=None)
     parser.add_argument("--subtitles", type=str, help="Output SRT path")
     parser.add_argument("--slice-dir", type=str, help="Directory to output sliced videos with OpenCV")
+    parser.add_argument("--target-bpm", type=float, help="If set, rescale each slice to this BPM")
+    parser.add_argument("--target-fps", type=float, default=None, help="FPS for resampled output; defaults to original video FPS")
     parser.add_argument("--plot", action="store_true")
     args = parser.parse_args()
 
     start = parse_timestamp(args.start) if args.start else None
     end   = parse_timestamp(args.end)   if args.end   else None
 
+    # Extract features only within the given time window
     features, fps = extract_frame_features(args.video_path, tuple(args.resize), start, end)
     if features.shape[0] < 2:
-        print("Not enough frames.")
+        print("Not enough frames in the specified range.")
         return
 
+    # Compute relative segments within the extracted range
     w_sec = parse_timestamp(args.window)
     h_sec = parse_timestamp(args.hop)
-    segments = sliding_window_bpm(features, fps, w_sec, h_sec, tolerance=args.tol)
+    raw_segments = sliding_window_bpm(features, fps, w_sec, h_sec, tolerance=args.tol)
 
+    # Offset segments back to absolute video frame indices
+    frame_offset = int(start * fps) if start is not None else 0
+    segments = [(s + frame_offset, e + frame_offset, bpm) for s, e, bpm in raw_segments]
+
+    # Apply min/max BPM filters
     if args.min_bpm or args.max_bpm:
         segments = [seg for seg in segments if
                     (args.min_bpm is None or seg[2] >= args.min_bpm) and
                     (args.max_bpm is None or seg[2] <= args.max_bpm)]
-    segments.sort(key=lambda x: x[1]-x[0], reverse=True)
+    segments.sort(key=lambda x: x[1] - x[0], reverse=True)
 
+    # Print segment times in absolute video time
     for idx, (s, e, bpm) in enumerate(segments, 1):
-        start_str = format_timestamp(s/fps)
-        end_str = format_timestamp(e/fps)
+        start_str = format_timestamp(s / fps)
+        end_str   = format_timestamp(e / fps)
         print(f"{idx}. {start_str} - {end_str} : {bpm:.1f} BPM")
 
+    # Write subtitles if requested
     if args.subtitles:
         with open(args.subtitles, 'w') as f:
-            for idx, (s, e, bpm) in enumerate(segments,1):
+            for idx, (s, e, bpm) in enumerate(segments, 1):
                 f.write(f"{idx}\n")
-                f.write(f"{format_timestamp_srt(s/fps)} --> {format_timestamp_srt(e/fps)}\n")
+                f.write(f"{format_timestamp_srt(s / fps)} --> {format_timestamp_srt(e / fps)}\n")
                 f.write(f"{bpm:.1f} BPM\n\n")
         print(f"Subtitles written to {args.subtitles}")
 
+    # Slice (and optionally convert) segments
     if args.slice_dir:
-        slice_video_opencv(args.video_path, segments, args.slice_dir)
+        slice_video_opencv(
+            args.video_path,
+            segments,
+            args.slice_dir,
+            target_bpm=args.target_bpm,
+            target_fps=args.target_fps
+        )
 
 if __name__ == "__main__":
     main()
